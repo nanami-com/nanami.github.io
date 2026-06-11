@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>地質図で歩く 西湘・箱根</title>
+<meta name="description" content="地形・地質・温泉から「その土地だから、これがある」を読み解く地図メディア">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --ink:#26241F;          /* 安山岩の墨色 */
+    --ink-soft:#5C574D;
+    --paper:#FBFAF7;        /* 噴気の白 */
+    --line:#E3DFD6;
+    --yu:#2F6E63;           /* 湯の青磁 */
+    --yu-soft:#E4EFEC;
+    --volcanic:#FAECE7;     /* 火山チップ */
+    --volcanic-ink:#712B13;
+    --sulfur:#FAEEDA;       /* 硫黄チップ */
+    --sulfur-ink:#633806;
+    --stone:#F1EFE8;        /* 石・食チップ */
+    --stone-ink:#2C2C2A;
+    --sea:#E6F1FB;
+    --sea-ink:#042C53;
+    --radius:14px;
+    --shadow:0 4px 24px rgba(38,36,31,.14);
+    --serif:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;
+    --sans:"Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--sans);color:var(--ink);background:var(--paper)}
+  #map{position:fixed;inset:0;background:#DDD8CC}
+  .leaflet-pane.pane-hillshade{mix-blend-mode:multiply}
+
+  /* ---------- 上部：タイトル ---------- */
+  .masthead{
+    position:fixed;top:max(10px,env(safe-area-inset-top));left:10px;z-index:1000;
+    background:rgba(251,250,247,.92);backdrop-filter:blur(6px);
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:10px 14px;box-shadow:var(--shadow);max-width:min(72vw,330px);
+  }
+  .masthead h1{font-family:var(--serif);font-size:17px;font-weight:600;letter-spacing:.04em;line-height:1.3}
+  .masthead p{font-size:11px;color:var(--ink-soft);margin-top:3px;letter-spacing:.02em}
+
+  /* ---------- 上部：レイヤー操作 ---------- */
+  .layers{
+    position:fixed;top:max(10px,env(safe-area-inset-top));right:10px;z-index:1000;
+    background:rgba(251,250,247,.92);backdrop-filter:blur(6px);
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:10px 12px;box-shadow:var(--shadow);width:158px;
+  }
+  .layers label{display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;user-select:none}
+  .layers input[type=checkbox]{accent-color:var(--yu);width:15px;height:15px}
+  .layers input[type=range]{width:100%;margin-top:8px;accent-color:var(--yu)}
+  .layers .hint{font-size:10px;color:var(--ink-soft);margin-top:5px;line-height:1.5}
+
+  /* ---------- ピン ---------- */
+  .geo-pin{background:none;border:none}
+  .geo-pin .dot{
+    width:26px;height:26px;border-radius:50%;
+    background:var(--ink);border:3px solid var(--paper);
+    box-shadow:0 2px 8px rgba(38,36,31,.4);
+    display:flex;align-items:center;justify-content:center;
+    transition:transform .15s ease;
+  }
+  .geo-pin .dot::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--paper)}
+  .geo-pin.active .dot{background:var(--yu);transform:scale(1.25)}
+  .geo-pin .nm{
+    position:absolute;top:28px;left:50%;transform:translateX(-50%);
+    font-size:11px;font-weight:600;white-space:nowrap;color:var(--ink);
+    text-shadow:0 0 4px var(--paper),0 0 4px var(--paper),0 0 6px var(--paper);
+    letter-spacing:.03em;
+  }
+
+  /* ---------- ボトムシート ---------- */
+  .sheet{
+    position:fixed;left:0;right:0;bottom:0;z-index:1100;
+    margin:0 auto;max-width:640px;
+    background:var(--paper);border:1px solid var(--line);border-bottom:none;
+    border-radius:18px 18px 0 0;box-shadow:0 -8px 32px rgba(38,36,31,.18);
+    transform:translateY(105%);transition:transform .3s cubic-bezier(.3,.9,.3,1);
+    padding:10px 20px calc(20px + env(safe-area-inset-bottom));
+    max-height:62vh;overflow-y:auto;
+  }
+  .sheet.open{transform:translateY(0)}
+  @media (prefers-reduced-motion:reduce){.sheet{transition:none}.geo-pin .dot{transition:none}}
+  .sheet .grip{width:38px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 12px}
+  .sheet .close{
+    position:absolute;top:12px;right:14px;border:none;background:var(--stone);
+    width:30px;height:30px;border-radius:50%;font-size:15px;color:var(--ink-soft);
+    cursor:pointer;line-height:1;
+  }
+  .sheet .close:focus-visible,.layers input:focus-visible,.chip-link:focus-visible{outline:2px solid var(--yu);outline-offset:2px}
+  .sheet .eyebrow{font-size:11px;letter-spacing:.12em;color:var(--yu);font-weight:600;margin-bottom:5px}
+  .sheet h2{font-family:var(--serif);font-size:21px;font-weight:600;line-height:1.35;margin-bottom:12px;padding-right:32px}
+  .chain{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:13px}
+  .chip{font-size:12.5px;padding:4px 11px;border-radius:9px;font-weight:500;letter-spacing:.01em}
+  .arrow{color:var(--ink-soft);font-size:12px}
+  .sheet .body{font-size:14px;line-height:1.95;color:var(--ink)}
+  .sheet .body + .body{margin-top:10px}
+  .sheet .src{font-size:11px;color:var(--ink-soft);margin-top:14px;line-height:1.7;border-top:1px solid var(--line);padding-top:10px}
+  .more-link{
+    display:inline-block;margin-top:14px;padding:9px 18px;border-radius:10px;
+    background:var(--yu);color:var(--paper);text-decoration:none;
+    font-size:13.5px;font-weight:600;letter-spacing:.04em;
+  }
+  .more-link:hover{opacity:.88}
+  .more-link:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .more-soon{display:inline-block;margin-top:14px;font-size:12px;color:var(--ink-soft)}
+  .sheet .src a{color:var(--yu)}
+
+  /* ---------- タッチ地質カード ---------- */
+  .probe-title{display:flex;align-items:baseline;gap:8px;margin-bottom:10px}
+  .probe-badge{font-size:11px;background:var(--yu-soft);color:var(--yu);padding:3px 9px;border-radius:8px;font-weight:600;letter-spacing:.05em;white-space:nowrap}
+  dl.probe{display:grid;grid-template-columns:5.5em 1fr;row-gap:7px;column-gap:10px;font-size:13.5px;line-height:1.7}
+  dl.probe dt{color:var(--ink-soft);font-size:12px;padding-top:2px;letter-spacing:.05em}
+  dl.probe dd{font-weight:500}
+  .probe-note{font-size:11.5px;color:var(--ink-soft);margin-top:12px;line-height:1.8}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--yu);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2s}}
+
+  /* ---------- 出典 ---------- */
+  .leaflet-control-attribution{font-size:10px !important;background:rgba(251,250,247,.85) !important}
+</style>
+</head>
+<body>
+
+<div id="map" role="application" aria-label="西湘・箱根の地形・地質マップ"></div>
+
+<header class="masthead">
+  <h1>地質図で歩く 西湘・箱根</h1>
+  <p>その土地だから、これがある。地図のどこでも触れてみてください。</p>
+</header>
+
+<div class="layers" role="group" aria-label="レイヤー操作">
+  <label><input type="checkbox" id="geoToggle" checked> 地質図を重ねる</label>
+  <input type="range" id="geoOpacity" min="0" max="100" value="45" aria-label="地質図の濃さ">
+  <p class="hint">地質：産総研シームレス地質図V2<br>地図：地理院 淡色地図＋陰影起伏</p>
+</div>
+
+<section class="sheet" id="sheet" aria-live="polite">
+  <div class="grip" aria-hidden="true"></div>
+  <button class="close" id="sheetClose" aria-label="閉じる">×</button>
+  <div id="sheetContent"></div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  /* ===== 地図本体 ===== */
+  var map = L.map('map', {
+    center: [35.215, 139.07],
+    zoom: 11,
+    minZoom: 9,
+    maxZoom: 16,
+    zoomControl: false,
+    attributionControl: true
+  });
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  map.attributionControl.setPrefix(false);
+
+  /* 描画順のためのペイン */
+  map.createPane('pane-relief');    map.getPane('pane-relief').style.zIndex = 200;
+  map.createPane('pane-hillshade'); map.getPane('pane-hillshade').style.zIndex = 210;
+  map.getPane('pane-hillshade').classList.add('pane-hillshade');
+  map.createPane('pane-geology');   map.getPane('pane-geology').style.zIndex = 220;
+
+  var attrGSI = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>';
+  var attrGSJ = '<a href="https://gbank.gsj.jp/seamless/" target="_blank" rel="noopener">産総研シームレス地質図V2</a>';
+
+  /* 背景：淡色地図（地名・道路）＋ 陰影起伏図を薄く乗算（地形の立体感） */
+  L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+    pane:'pane-relief', maxNativeZoom:18, maxZoom:16, opacity:1, attribution:attrGSI
+  }).addTo(map);
+  L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png', {
+    pane:'pane-hillshade', maxNativeZoom:16, maxZoom:16, opacity:0.35
+  }).addTo(map);
+
+  /* 地質：シームレス地質図V2（タイル座標は {z}/{y}/{x} の順） */
+  var geology = L.tileLayer('https://gbank.gsj.jp/seamless/v2/api/1.2/tiles/{z}/{y}/{x}.png', {
+    pane:'pane-geology', maxNativeZoom:13, maxZoom:16, opacity:0.45, attribution:attrGSJ
+  }).addTo(map);
+
+  document.getElementById('geoToggle').addEventListener('change', function(){
+    if (this.checked) { geology.addTo(map); } else { map.removeLayer(geology); }
+  });
+  document.getElementById('geoOpacity').addEventListener('input', function(){
+    geology.setOpacity(this.value/100);
+  });
+
+  /* ===== 記事ピン ===== */
+  var SPOTS = [
+    {
+      name:'大涌谷', lat:35.2444, lng:139.0194, eyebrow:'火山 と 食',
+      title:'なぜ箱根といえば、黒たまごなのか',
+      chain:[
+        {t:'神山の崩壊（約3000年前）', bg:'var(--volcanic)', fg:'var(--volcanic-ink)'},
+        {t:'硫気と鉄の池', bg:'var(--sulfur)', fg:'var(--sulfur-ink)'},
+        {t:'黒たまご', bg:'var(--stone)', fg:'var(--stone-ink)'}
+      ],
+      body:[
+        '大涌谷は、最高峰・神山が約3000年前に起こした水蒸気爆発と山体崩壊の傷あと。崩れた土砂は早川をせき止め、芦ノ湖まで生んだ。噴気は3000年、まだ止まっていない。',
+        '約80℃の温泉池で茹でるうちに殻は黒くなり、空気に触れると逆に一日ほどで褪せていく。黒の正体は長く「硫化鉄」と説明されてきたが、近年の分析で、硫黄が絡んだタンパク質由来の褐変物質だとする新しい推定が出ており、定説が塗り替えられつつある。誰もが知る名物の足もとで、いまも研究が動いている。'
+      ],
+      src:'出典：箱根ジオパーク、分析化学 72巻（2023）「黒たまご」黒色物質の起源推定',
+      url:'articles/owakudani.html'
+    },
+    {
+      name:'真鶴', lat:35.155, lng:139.150, eyebrow:'溶岩 と 石の町',
+      title:'江戸城は、箱根火山でできている',
+      chain:[
+        {t:'箱根火山の溶岩流', bg:'var(--volcanic)', fg:'var(--volcanic-ink)'},
+        {t:'本小松石', bg:'var(--stone)', fg:'var(--stone-ink)'},
+        {t:'石の町・海の幸', bg:'var(--sea)', fg:'var(--sea-ink)'}
+      ],
+      body:[
+        '真鶴半島をつくるのは、箱根火山から流れ下った溶岩が冷え固まった安山岩。きめ細かく粘り強いこの石は「本小松石」と呼ばれ、江戸城の石垣にも海路で運ばれた。採石は今も続き、町は文字どおり石とともに生きてきた。',
+        '岬の岩礁と「お林」と呼ばれる魚付き保安林は、豊かな漁場も支える。石も魚も、根をたどれば同じ溶岩流に行き着く。'
+      ],
+      src:'出典：箱根ジオパーク（真鶴エリア）'
+    },
+    {
+      name:'箱根湯本', lat:35.2326, lng:139.1056, eyebrow:'地質 と 湯',
+      title:'一つの山に、なぜ何種類もの湯が湧くのか',
+      chain:[
+        {t:'入り組んだ火山構造', bg:'var(--volcanic)', fg:'var(--volcanic-ink)'},
+        {t:'多彩な泉質', bg:'var(--sulfur)', fg:'var(--sulfur-ink)'},
+        {t:'湯めぐり文化', bg:'var(--yu-soft)', fg:'var(--yu)'}
+      ],
+      body:[
+        'カルデラ、中央火口丘、古い外輪山。箱根は一つの山というより、何世代もの火山が折り重なった集合体だ。湯は通る地層と距離によって性質を変え、同じ箱根でも場所ごとに別の顔を見せる。',
+        'やわらかな単純温泉から、白濁した酸性の硫黄泉まで。「十七湯」を比べ歩く文化は、この地質の入り組みがなければ生まれなかった。'
+      ],
+      src:'出典：箱根ジオパーク、箱根町観光協会（箱根十七湯）'
+    },
+    {
+      name:'強羅', lat:35.2507, lng:139.0485, eyebrow:'地質 と 湯',
+      title:'なぜ箱根の交通網は強羅を起点にしたのか',
+      chain:[
+        {t:'入り組んだ火山構造', bg:'var(--volcanic)', fg:'var(--volcanic-ink)'},
+        {t:'多彩な泉質', bg:'var(--sulfur)', fg:'var(--sulfur-ink)'},
+        {t:'湯めぐり文化', bg:'var(--yu-soft)', fg:'var(--yu)'}
+      ],
+      body:[
+        'カルデラ、中央火口丘、古い外輪山。箱根は一つの山というより、何世代もの火山が折り重なった集合体だ。湯は通る地層と距離によって性質を変え、同じ箱根でも場所ごとに別の顔を見せる。',
+        'やわらかな単純温泉から、白濁した酸性の硫黄泉まで。「十七湯」を比べ歩く文化は、この地質の入り組みがなければ生まれなかった。'
+      ],
+      src:'出典：箱根ジオパーク、箱根町観光協会（箱根十七湯）'
+    }
+  ];
+
+  var sheet = document.getElementById('sheet');
+  var sheetContent = document.getElementById('sheetContent');
+  var markers = [];
+
+  function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+
+  function closeSheet(){
+    sheet.classList.remove('open');
+    markers.forEach(function(m){ m.getElement() && m.getElement().classList.remove('active'); });
+  }
+  document.getElementById('sheetClose').addEventListener('click', closeSheet);
+
+  function openSpot(spot, marker){
+    markers.forEach(function(m){ m.getElement() && m.getElement().classList.remove('active'); });
+    marker.getElement() && marker.getElement().classList.add('active');
+    var chainHtml = spot.chain.map(function(c){
+      return '<span class="chip" style="background:'+c.bg+';color:'+c.fg+'">'+esc(c.t)+'</span>';
+    }).join('<span class="arrow">→</span>');
+    var moreHtml = spot.url
+      ? '<a class="more-link" href="'+esc(spot.url)+'">続きを読む<span aria-hidden="true"> →</span></a>'
+      : '<span class="more-soon">本編は準備中です</span>';
+    sheetContent.innerHTML =
+      '<p class="eyebrow">'+esc(spot.eyebrow)+'</p>'+
+      '<h2>'+esc(spot.title)+'</h2>'+
+      '<div class="chain">'+chainHtml+'</div>'+
+      spot.body.map(function(p){return '<p class="body">'+esc(p)+'</p>';}).join('')+
+      moreHtml+
+      '<p class="src">'+esc(spot.src)+'</p>';
+    sheet.classList.add('open');
+  }
+
+  SPOTS.forEach(function(spot){
+    var icon = L.divIcon({
+      className:'geo-pin',
+      html:'<div class="dot"></div><div class="nm">'+esc(spot.name)+'</div>',
+      iconSize:[26,26], iconAnchor:[13,13]
+    });
+    var m = L.marker([spot.lat, spot.lng], {icon:icon, keyboard:true, title:spot.name}).addTo(map);
+    m.on('click', function(e){
+      L.DomEvent.stopPropagation(e);
+      openSpot(spot, m);
+    });
+    markers.push(m);
+  });
+
+  /* ===== どこでもタッチ：その地点の地質を取得 ===== */
+  var probeMarker = null;
+
+  function showProbeLoading(lat,lng){
+    sheetContent.innerHTML =
+      '<div class="probe-title"><span class="probe-badge">いまタッチした足もと</span></div>'+
+      '<p class="body"><span class="spinner" aria-hidden="true"></span>この地点の地質を調べています…</p>';
+    sheet.classList.add('open');
+  }
+
+  function pick(obj, keys){
+    for (var i=0;i<keys.length;i++){
+      if (obj && obj[keys[i]] != null && obj[keys[i]] !== '') return obj[keys[i]];
+    }
+    return null;
+  }
+
+  function showProbeResult(lat,lng,data){
+    var title = pick(data, ['title','title_ja','symbol']);
+    var litho = pick(data, ['lithology_ja','lithology']);
+    var age   = pick(data, ['formationAge_ja','formation_age_ja','formationAge','age']);
+    var group = pick(data, ['group_ja','group']);
+    var rows = '';
+    if (litho) rows += '<dt>岩相</dt><dd>'+esc(litho)+'</dd>';
+    if (age)   rows += '<dt>形成年代</dt><dd>'+esc(age)+'</dd>';
+    if (group) rows += '<dt>区分</dt><dd>'+esc(group)+'</dd>';
+    rows += '<dt>地点</dt><dd>'+lat.toFixed(4)+', '+lng.toFixed(4)+'</dd>';
+    sheetContent.innerHTML =
+      '<div class="probe-title"><span class="probe-badge">いまタッチした足もと</span></div>'+
+      '<h2>'+esc(title || 'この地点の地質')+'</h2>'+
+      '<dl class="probe">'+rows+'</dl>'+
+      '<p class="probe-note">凡例の詳細は産総研シームレス地質図V2に基づきます。この足もとの上に、どんな湯が湧き、何が育ち、何が食べられてきたか——それがこのメディアの本編になります。</p>';
+  }
+
+  function showProbeError(){
+    sheetContent.innerHTML =
+      '<div class="probe-title"><span class="probe-badge">いまタッチした足もと</span></div>'+
+      '<h2>地質情報を取得できませんでした</h2>'+
+      '<p class="body">通信環境、またはAPIへの接続制限の可能性があります。時間をおいて再度お試しください。</p>';
+  }
+
+  map.on('click', function(e){
+    var lat = e.latlng.lat, lng = e.latlng.lng;
+    if (probeMarker) { map.removeLayer(probeMarker); }
+    probeMarker = L.circleMarker([lat,lng], {
+      radius:7, color:'#2F6E63', weight:2.5, fillColor:'#FBFAF7', fillOpacity:0.9
+    }).addTo(map);
+    showProbeLoading(lat,lng);
+    var url = 'https://gbank.gsj.jp/seamless/v2/api/1.2.1/legend.json?point='+lat+','+lng;
+    fetch(url)
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(json){ showProbeResult(lat,lng,json); })
+      .catch(function(){ showProbeError(); });
+  });
+
+  /* Escで閉じる */
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeSheet();
+  });
+})();
+</script>
+</body>
+</html>
